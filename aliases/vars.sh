@@ -1,0 +1,8 @@
+export CZ_GIT="/home/thinkpadx395_kei19/.local/share/chezmoi/.git"
+export CZ_NVIM="/home/thinkpadx395_kei19/.local/share/chezmoi/dot_config/nvim"
+export CZ_OPT="/home/thinkpadx395_kei19/.local/share/chezmoi/optimize"
+export CZ_FISH="/home/thinkpadx395_kei19/.local/share/chezmoi/dot_config/fish"
+export CZ_CONFIG="/home/thinkpadx395_kei19/.local/share/chezmoi/dot_config"
+export CZ="/home/thinkpadx395_kei19/.local/share/chezmoi"
+export CZ_CI="/home/thinkpadx395_kei19/.local/share/chezmoi/ci"
+export CZ_LUA="/home/thinkpadx395_kei19/.local/share/chezmoi/lua"
