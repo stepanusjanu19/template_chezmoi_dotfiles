@@ -258,4 +258,5 @@ alias brave-restart='killall brave 2>/dev/null; sleep 0.5; rm -rf ~/.config/Brav
 #######################
 
 source ~/.local/share/chezmoi/aliases/bash_aliases.sh
-source ~/.local/share/chezmoi/aliases/vars.sh
+source ~/.local/share/chezmoi/aliases/vars.sh 
+
