@@ -38,6 +38,52 @@ int run(char *const argv[]) {
     return 1;
 }
 
+
+int find_project_root(char *out) {
+    char path[PATH_MAX];
+    getcwd(path, sizeof(path));
+
+    while (1) {
+        char git[PATH_MAX];
+        snprintf(git, sizeof(git), "%s/.git", path);
+        if (exists(git)) {
+            strcpy(out, path);
+            return 1;
+        }
+
+        if (strcmp(path, "/") == 0) break;
+        char *s = strrchr(path, '/');
+        if (!s) break;
+        *s = 0;
+    }
+    return 0;
+}
+
+
+int capture(char *const argv[], char *out, size_t sz) {
+    int fd[2];
+    pipe(fd);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(fd[1], STDOUT_FILENO);
+        close(fd[0]);
+        close(fd[1]);
+        execvp(argv[0], argv);
+        exit(127);
+    }
+
+    close(fd[1]);
+    ssize_t n = read(fd[0], out, sz - 1);
+    close(fd[0]);
+    waitpid(pid, NULL, 0);
+
+    if (n <= 0) return 1;
+    out[n] = 0;
+    out[strcspn(out, "\n")] = 0;
+    return 0;
+}
+
 void expand_home(char *out, const char *path) {
     if (path[0] == '~')
         snprintf(out, MAX, "%s%s", getenv("HOME"), path + 1);
@@ -61,7 +107,59 @@ void post_hook(int status) {
 }
 
 
+void prompt(const char *msg, char *out, size_t sz) {
+    fprintf(stderr, "%s: ", msg);
+    fflush(stderr);
+    fgets(out, sz, stdin);
+    out[strcspn(out, "\n")] = 0;
+}
+
+
+void ensure_repos_and_redirect() {
+    if (!isatty(STDIN_FILENO))
+        return;
+
+    char root[PATH_MAX];
+    if (!find_project_root(root))
+        getcwd(root, sizeof(root));
+
+    char repos[PATH_MAX];
+    snprintf(repos, sizeof(repos), "%s/.repos", root);
+
+    if (exists(repos)) {
+        freopen(repos, "r", stdin);
+        return;
+    }
+
+    char url[MAX] = {0};
+    char branch[MAX] = "main";
+
+    if (exists(".git")) {
+        if (capture((char*[]){"git","remote","get-url","origin",NULL},
+                    url, sizeof(url)) != 0) {
+            prompt("enter remote url", url, sizeof(url));
+            run((char*[]){"git","remote","add","origin",url,NULL});
+        }
+
+        capture((char*[]){"git","branch","--show-current",NULL},
+                branch, sizeof(branch));
+    }
+    else {
+        prompt("enter remote url", url, sizeof(url));
+    }
+
+    FILE *f = fopen(repos, "w");
+    fprintf(f, "%s origin %s %s\n", root, url, branch);
+    fclose(f);
+
+    freopen(repos, "r", stdin);
+}
+
+
 void sync_mode() {
+    
+    ensure_repos_and_redirect();
+
     char path[MAX], remote[MAX], url[MAX], branch[MAX];
     char fullpath[MAX], gitdir[MAX];
     char cwd[PATH_MAX];
