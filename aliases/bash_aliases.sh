@@ -26,3 +26,17 @@ alias czgit='cd $CZ && git'
 alias czst='cd $CZ && git status'
 alias czpull='cd $CZ && git pull'
 alias czpush='cd $CZ && git push'
+
+##########################################################################
+
+alias g='git'
+alias gs='git status'
+alias gl='git pull --rebase'
+alias gp='git push'
+alias gb='git branch'
+alias gco='git checkout'
+alias gr='git rebase'
+alias gtag='git tag'
+alias gwt='git worktree'
+alias gclean='git clean -fd'
+alias gundo='git reset --soft HEAD~1'
