@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -134,6 +135,12 @@ int detect_default_branch_remote_fallback(char *branch, size_t sz) {
 int is_dirty() {
     return run((char*[]){"git","diff","--quiet",NULL}) != 0 ||
            run((char*[]){"git","diff","--cached","--quiet",NULL}) != 0;
+}
+
+bool directory_has_git(const char *path) {
+    char buf[PATH_MAX];
+    snprintf(buf, sizeof(buf), "%s/.git", path);
+    return access(buf, F_OK) == 0;
 }
 
 
@@ -270,9 +277,8 @@ void sync_mode() {
         char realcwd[PATH_MAX];
         char realfull[PATH_MAX];
         if (realpath(cwd, realcwd) && realpath(fullpath, realfull)) {
-            if (strcmp(realcwd, realfull) == 0) {
-                fprintf(stderr,
-                    "ghctl: cannot clone into current directory: %s\n", fullpath);
+            if (strcmp(realcwd, realfull) == 0 &&!directory_has_git(fullpath)) {
+                fprintf(stderr,"ghctl: cannot clone into current directory: %s\n", fullpath);
                 post_hook(1);
                 continue;
             }
@@ -281,7 +287,14 @@ void sync_mode() {
         snprintf(gitdir, MAX, "%s/.git", fullpath);
 
         pre_hook("sync", "repo", fullpath);
-
+        
+        if (!directory_has_git(fullpath)) {
+            fprintf(stderr,
+                    "ghctl: skip (no .git): %s\n", fullpath);
+            post_hook(0);
+            continue;
+        }
+        
         int did_clone = 0;
         
         if (!exists(gitdir)) {
