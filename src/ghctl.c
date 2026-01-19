@@ -8,9 +8,12 @@
 #include <sys/wait.h>
 #include <limits.h>
 #include <linux/limits.h>
-
+#include <dirent.h>
 
 #define MAX 1024
+
+char *realpath(const char *restrict path,
+               char *restrict resolved_path);
 
 int exists(const char *path) {
     struct stat st;
@@ -84,6 +87,55 @@ int capture(char *const argv[], char *out, size_t sz) {
     return 0;
 }
 
+
+
+int detect_default_branch(char *branch, size_t sz) {
+    char buf[4096] = {0};
+
+    if (capture((char*[]){"git","remote","show","origin",NULL},
+                buf, sizeof(buf)) != 0)
+        return 0;
+
+    char *p = strstr(buf, "HEAD branch:");
+    if (!p) return 0;
+
+    p += strlen("HEAD branch:");
+    while (*p == ' ') p++;
+
+    char *e = strchr(p, '\n');
+    if (e) *e = 0;
+
+    strncpy(branch, p, sz);
+    return 1;
+}
+
+
+int detect_default_branch_remote_fallback(char *branch, size_t sz) {
+    char buf[4096] = {0};
+
+    if (capture((char*[]){"git","remote","show","origin",NULL},
+                buf, sizeof(buf)) != 0)
+        return 0;
+
+    char *p = strstr(buf, "HEAD branch:");
+    if (!p) return 0;
+
+    p += strlen("HEAD branch:");
+    while (*p == ' ') p++;
+
+    char *e = strchr(p, '\n');
+    if (e) *e = 0;
+
+    strncpy(branch, p, sz);
+    return 1;
+}
+
+
+int is_dirty() {
+    return run((char*[]){"git","diff","--quiet",NULL}) != 0 ||
+           run((char*[]){"git","diff","--cached","--quiet",NULL}) != 0;
+}
+
 void expand_home(char *out, const char *path) {
     if (path[0] == '~')
         snprintf(out, MAX, "%s%s", getenv("HOME"), path + 1);
@@ -115,16 +167,24 @@ void prompt(const char *msg, char *out, size_t sz) {
 }
 
 
+void detect_branch(char *branch, size_t sz) {
+    if (capture((char*[]){"git","symbolic-ref","--short","HEAD",NULL},
+                branch, sz) != 0) {
+        strncpy(branch, "master", sz);
+    }
+}
+
 void ensure_repos_and_redirect() {
     if (!isatty(STDIN_FILENO))
         return;
-
+    
     char root[PATH_MAX];
     if (!find_project_root(root))
         getcwd(root, sizeof(root));
 
     char repos[PATH_MAX];
-    snprintf(repos, sizeof(repos), "%s/.repos", root);
+    getcwd(repos, sizeof(repos));
+    strcat(repos, "/.repos");
 
     if (exists(repos)) {
         freopen(repos, "r", stdin);
@@ -132,7 +192,8 @@ void ensure_repos_and_redirect() {
     }
 
     char url[MAX] = {0};
-    char branch[MAX] = "main";
+    char branch[MAX] = "";
+    char reponame[MAX] = "";
 
     if (exists(".git")) {
         if (capture((char*[]){"git","remote","get-url","origin",NULL},
@@ -140,16 +201,38 @@ void ensure_repos_and_redirect() {
             prompt("enter remote url", url, sizeof(url));
             run((char*[]){"git","remote","add","origin",url,NULL});
         }
-
-        capture((char*[]){"git","branch","--show-current",NULL},
-                branch, sizeof(branch));
+        detect_branch(branch, sizeof(branch));
     }
     else {
         prompt("enter remote url", url, sizeof(url));
+        
+        char *p = strrchr(url, '/');
+        if (p) {
+            strncpy(reponame, p + 1, sizeof(reponame) - 1);
+            char *dot = strstr(reponame, ".git");
+            if (dot) *dot = 0;
+        }
+        if (!reponame[0]) {
+            strncpy(reponame, "repo", sizeof(reponame) - 1);
+        }
     }
 
     FILE *f = fopen(repos, "w");
-    fprintf(f, "%s origin %s %s\n", root, url, branch);
+    if (reponame[0]) {
+        char repopath[PATH_MAX];
+        snprintf(repopath, sizeof(repopath), "%s/%s", root, reponame);
+        if (branch[0]) {
+            fprintf(f, "%s origin %s %s\n", repopath, url, branch);
+        } else {
+            fprintf(f, "%s origin %s\n", repopath, url);
+        }
+    } else {
+        if (branch[0]) {
+            fprintf(f, "%s origin %s %s\n", root, url, branch);
+        } else {
+            fprintf(f, "%s origin %s\n", root, url);
+        }
+    }
     fclose(f);
 
     freopen(repos, "r", stdin);
@@ -163,28 +246,100 @@ void sync_mode() {
     char path[MAX], remote[MAX], url[MAX], branch[MAX];
     char fullpath[MAX], gitdir[MAX];
     char cwd[PATH_MAX];
+    char repos_path[PATH_MAX];
+    int status = 0;
 
     getcwd(cwd, sizeof(cwd));
+    snprintf(repos_path, sizeof(repos_path), "%s/.repos", cwd);
 
-    while (scanf("%1023s %1023s %1023s %1023s",
-                 path, remote, url, branch) == 4) {
+    int n;
+    while ((n = scanf("%1023s %1023s %1023s %1023s",
+                   path, remote, url, branch)) >= 3) {
+        status = 0;
+        if (n < 4) branch[0] = 0;
 
         expand_home(fullpath, path);
+        
+        char realcwd[PATH_MAX];
+        char realfull[PATH_MAX];
+        if (realpath(cwd, realcwd) && realpath(fullpath, realfull)) {
+            if (strcmp(realcwd, realfull) == 0) {
+                fprintf(stderr,
+                    "ghctl: cannot clone into current directory: %s\n", fullpath);
+                post_hook(1);
+                continue;
+            }
+        }
+        
         snprintf(gitdir, MAX, "%s/.git", fullpath);
 
         pre_hook("sync", "repo", fullpath);
 
+        int did_clone = 0;
+        
         if (!exists(gitdir)) {
-            char *clone[] = {"git", "clone", url, fullpath, NULL};
-            run(clone);
+            if (exists(fullpath)) {
+                if (access(fullpath, R_OK | W_OK) != 0) {
+                    fprintf(stderr,
+                        "ghctl: cannot access directory: %s\n", fullpath);
+                    post_hook(1);
+                    chdir(cwd);
+                    continue;
+                }
+                
+                DIR *d = opendir(fullpath);
+                struct dirent *e;
+                int count = 0;
+
+                while (d && (e = readdir(d))) {
+                    if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) {
+                        count++;
+                        break;
+                    }
+                }
+
+                if (d) closedir(d);
+
+                if (count) {
+                    fprintf(stderr,
+                        "ghctl: directory not empty and not a git repo: %s\n", fullpath);
+                    post_hook(1);
+                    chdir(cwd);
+                    continue;
+                }
+            }
+            
+            if (run((char*[]){"git","clone",url,fullpath,NULL}) != 0){
+              post_hook(1);
+              chdir(cwd);
+              continue;
+            }
+            did_clone = 1;
+
+            if (!branch[0]) {
+                char saved_cwd[PATH_MAX];
+                getcwd(saved_cwd, sizeof(saved_cwd));
+                chdir(fullpath);
+                detect_branch(branch, sizeof(branch));
+                chdir(saved_cwd);
+            }
+            
+            if (branch[0]) {
+                FILE *f = fopen(repos_path, "w");
+                if (f) {
+                    fprintf(f, "%s %s %s %s\n", fullpath, remote, url, branch);
+                    fclose(f);
+                }
+            }
+            
+            post_hook(status);
+            continue;
         }
-
+        
         chdir(fullpath);
-    
+        
         char *check[] = {"git", "remote", "get-url", remote, NULL};
-
         pid_t pid = fork();
-        int status = 0;
 
         if (pid == 0) {
             execvp(check[0], check);
@@ -210,8 +365,30 @@ void sync_mode() {
         char *fetch[] = {"git", "fetch", "--all", "--prune", NULL};
         run(fetch);
 
-        char *checkout[] = {"git", "checkout", branch, NULL};
-        run(checkout);
+        if (!branch[0]) {
+            if (!detect_default_branch(branch, sizeof(branch))) {
+                strcpy(branch, "master");
+            }
+        }
+        
+        if (is_dirty()) {
+            fprintf(stderr,
+                    "ghctl: working tree is dirty, aborting checkout\n");
+            post_hook(1);
+            chdir(cwd);
+            continue;
+        }
+        
+        
+        if (branch[0]) {
+            if (run((char*[]){"git","rev-parse","--verify",branch,NULL}) != 0) {
+                char upstream[PATH_MAX]; 
+                snprintf(upstream, sizeof(upstream), "origin/%s", branch);
+                run((char*[]){"git","checkout","-b",branch,"--track",upstream,NULL});
+            } else {
+                run((char*[]){"git","checkout",branch,NULL});
+            }
+        }
 
         post_hook(status);
         chdir(cwd);
@@ -263,4 +440,3 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
-
