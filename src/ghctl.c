@@ -288,12 +288,13 @@ void sync_mode() {
 
         pre_hook("sync", "repo", fullpath);
         
-        if (!directory_has_git(fullpath)) {
+        if (exists(fullpath) && !directory_has_git(fullpath)) {
             fprintf(stderr,
-                    "ghctl: skip (no .git): %s\n", fullpath);
+                "ghctl: skip (exists but no .git): %s\n", fullpath);
             post_hook(0);
             continue;
         }
+
         
         int did_clone = 0;
         
