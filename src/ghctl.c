@@ -136,11 +136,19 @@ int is_dirty() {
            run((char*[]){"git","diff","--cached","--quiet",NULL}) != 0;
 }
 
+
 void expand_home(char *out, const char *path) {
-    if (path[0] == '~')
-        snprintf(out, MAX, "%s%s", getenv("HOME"), path + 1);
-    else
-        strncpy(out, path, MAX);
+    if (path[0] == '~') {
+        snprintf(out, PATH_MAX, "%s%s", getenv("HOME"), path + 1);
+    }
+    else if (path[0] == '/') {
+        strncpy(out, path, PATH_MAX - 1);
+    }
+    else {
+        char cwd[PATH_MAX];
+        getcwd(cwd, sizeof(cwd));
+        snprintf(out, PATH_MAX, "%s/%s", cwd, path);
+    }
 }
 
 
@@ -179,8 +187,7 @@ void ensure_repos_and_redirect() {
         return;
     
     char root[PATH_MAX];
-    if (!find_project_root(root))
-        getcwd(root, sizeof(root));
+    getcwd(root, sizeof(root));
 
     char repos[PATH_MAX];
     getcwd(repos, sizeof(repos));
@@ -244,7 +251,7 @@ void sync_mode() {
     ensure_repos_and_redirect();
 
     char path[MAX], remote[MAX], url[MAX], branch[MAX];
-    char fullpath[MAX], gitdir[MAX];
+    char fullpath[PATH_MAX], gitdir[PATH_MAX];
     char cwd[PATH_MAX];
     char repos_path[PATH_MAX];
     int status = 0;
